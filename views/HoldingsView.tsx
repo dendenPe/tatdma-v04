@@ -17,7 +17,8 @@ import {
   Archive,
   Pencil,
   Check,
-  ChevronDown
+  ChevronDown,
+  History
 } from 'lucide-react';
 import { AppData, PortfolioYear, Portfolio } from '../types';
 import { ImportService } from '../services/importService';
@@ -185,6 +186,23 @@ const HoldingsView: React.FC<Props> = ({ data, onUpdate, globalYear }) => {
     );
   };
 
+  const MobileClosedCard = ({ pos }: { pos: any }) => {
+      const realUSD = pos.real; 
+      const realCHF = realUSD * usdToChf;
+      return (
+        <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
+           <div>
+              <h4 className="font-black text-gray-800 text-sm">{pos.symbol}</h4>
+              <span className="text-[10px] text-gray-400 font-bold uppercase">Realisierter PnL</span>
+           </div>
+           <div className={`text-right ${realUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+              <span className="block font-black text-sm">{realUSD >= 0 ? '+' : ''}{realUSD.toLocaleString('de-CH', {minimumFractionDigits: 2})} $</span>
+              <span className="text-[10px] font-bold opacity-60">~ {realCHF.toLocaleString('de-CH', {maximumFractionDigits: 0})} CHF</span>
+           </div>
+        </div>
+      );
+  };
+
   const MobileCashCard = ({ curr, amt, valCHF }: { curr: string, amt: number, valCHF: number }) => (
     <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
        <div className="flex items-center gap-3">
@@ -221,7 +239,7 @@ const HoldingsView: React.FC<Props> = ({ data, onUpdate, globalYear }) => {
                             type="text" 
                             value={renameValue} 
                             onChange={(e) => setRenameValue(e.target.value)}
-                            className="text-xl lg:text-2xl font-black text-gray-800 bg-gray-50 border-b-2 border-blue-500 outline-none w-full p-1"
+                            className="text-xl lg:text-2xl font-black text-gray-800 bg-gray-50 border-b-2 border-blue-50 outline-none w-full p-1"
                             autoFocus
                         />
                         <button onClick={saveRename} className="p-2 bg-green-50 text-green-600 rounded-lg"><Check size={20}/></button>
@@ -422,6 +440,55 @@ const HoldingsView: React.FC<Props> = ({ data, onUpdate, globalYear }) => {
             )}
           </div>
       </div>
+
+      {/* CLOSED POSITIONS SECTION - RESTORED */}
+      {closedPositions.length > 0 && (
+        <div className="space-y-4">
+            <div className="flex items-center gap-3 px-2">
+               <History className="text-gray-400" size={20} />
+               <h4 className="text-sm lg:text-lg font-black text-gray-600 uppercase tracking-tight">Realisierte Positionen (Verkäufe)</h4>
+            </div>
+            
+            {/* Desktop Table */}
+            <div className="hidden lg:block bg-white rounded-[32px] border border-gray-100 shadow-xl overflow-hidden">
+               <table className="w-full text-left">
+                  <thead className="bg-gray-50 text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] border-b border-gray-100">
+                     <tr>
+                        <th className="px-8 py-5">Symbol / Asset</th>
+                        <th className="px-8 py-5 text-right">Menge</th>
+                        <th className="px-8 py-5 text-right">Realisiert (USD)</th>
+                        <th className="px-8 py-5 text-right">Realisiert (CHF)</th>
+                     </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                     {closedPositions.map((pos) => {
+                        const realUSD = pos.real;
+                        const realCHF = realUSD * usdToChf;
+                        
+                        return (
+                        <tr key={`closed-${pos.symbol}`} className="hover:bg-gray-50/80 transition-colors">
+                           <td className="px-8 py-5">
+                              <span className="font-black text-gray-600">{pos.symbol}</span>
+                           </td>
+                           <td className="px-8 py-5 text-right font-bold text-gray-400">0</td>
+                           <td className={`px-8 py-5 text-right font-black ${realUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {realUSD >= 0 ? '+' : ''}{realUSD.toLocaleString('de-CH', { minimumFractionDigits: 2 })}
+                           </td>
+                           <td className={`px-8 py-5 text-right font-bold ${realCHF >= 0 ? 'text-green-600/70' : 'text-red-600/70'}`}>
+                              {realCHF >= 0 ? '+' : ''}{realCHF.toLocaleString('de-CH', { minimumFractionDigits: 2 })}
+                           </td>
+                        </tr>
+                     );})}
+                  </tbody>
+               </table>
+            </div>
+
+            {/* Mobile Cards */}
+            <div className="lg:hidden space-y-3">
+              {closedPositions.map(pos => <MobileClosedCard key={`closed-${pos.symbol}`} pos={pos} />)}
+            </div>
+        </div>
+      )}
 
       {/* CASH TABLE / CARDS */}
       <div className="space-y-4">
