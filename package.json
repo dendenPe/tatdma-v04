@@ -1,10 +1,9 @@
-
 {
   "name": "tatdma-v4",
   "private": true,
   "version": "4.0.0",
   "type": "module",
-  "homepage": "https://dendenpe.github.io/TatDma",
+  "homepage": "https://dendenpe.github.io/tatdma-v04",
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
