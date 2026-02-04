@@ -44,11 +44,14 @@ import {
   Palette,
   Undo,
   Redo,
-  ImagePlus
+  ImagePlus,
+  ArrowLeft,
+  UploadCloud
 } from 'lucide-react';
 import { AppData, NoteDocument, DocCategory } from '../types';
 import { DocumentService } from '../services/documentService';
 import { VaultService } from '../services/vaultService';
+import { DBService } from '../services/dbService';
 
 interface Props {
   data: AppData;
@@ -86,6 +89,7 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
   // Editor Refs
   const editorRef = useRef<HTMLDivElement>(null);
   const lastNoteIdRef = useRef<string | null>(null);
+  const mobileImportInputRef = useRef<HTMLInputElement>(null);
 
   // Derived Data
   const notesList = Object.values(data.notes || {}).sort((a, b) => new Date(b.created).getTime() - new Date(a.created).getTime());
@@ -111,34 +115,31 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
 
   // --- AUTOMATIC SCAN ON MOUNT ---
   useEffect(() => {
-    const timer = setTimeout(() => {
-        if (!isScanning) {
-            handleScanInbox(false); 
-        }
-    }, 800);
-    return () => clearTimeout(timer);
+    if (VaultService.isConnected()) {
+        const timer = setTimeout(() => {
+            if (!isScanning) {
+                handleScanInbox(false); 
+            }
+        }, 800);
+        return () => clearTimeout(timer);
+    }
   }, []); 
 
   // --- EDITOR SYNC (Fix for Backwards Typing) ---
   useEffect(() => {
       if (selectedNoteId && data.notes[selectedNoteId] && data.notes[selectedNoteId].type === 'note' && editorRef.current) {
           const noteContent = data.notes[selectedNoteId].content;
-          
-          // Fall 1: Wir haben zu einer anderen Notiz gewechselt -> Inhalt laden
           if (lastNoteIdRef.current !== selectedNoteId) {
               editorRef.current.innerHTML = noteContent;
               lastNoteIdRef.current = selectedNoteId;
           } 
-          // Fall 2: Gleiche Notiz, aber externer Update (z.B. Sync)
           else if (editorRef.current.innerHTML !== noteContent) {
-               // WICHTIG: Nur updaten, wenn wir NICHT gerade darin tippen (Fokus checken)
-               // Das verhindert, dass React unsere Eingabe während des Tippens überschreibt
                if (document.activeElement !== editorRef.current) {
                    editorRef.current.innerHTML = noteContent;
                }
           }
       }
-  }, [selectedNoteId, data.notes]); // Trigger bei ID oder Daten-Änderung
+  }, [selectedNoteId, data.notes]);
 
   // --- SEARCH CONTEXT HELPER ---
   const renderNotePreview = (content: string, query: string) => {
@@ -149,10 +150,7 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
       }
 
       const idx = cleanContent.toLowerCase().indexOf(query.toLowerCase());
-      
-      if (idx === -1) {
-          return <span className="text-gray-400">{cleanContent.substring(0, 90)}...</span>;
-      }
+      if (idx === -1) return <span className="text-gray-400">{cleanContent.substring(0, 90)}...</span>;
 
       const padding = 35; 
       const start = Math.max(0, idx - padding);
@@ -184,7 +182,6 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
   const handleEditorInput = () => {
       if (editorRef.current && selectedNoteId) {
           const html = editorRef.current.innerHTML;
-          // Nur State updaten, DOM lassen wir in Ruhe (das macht der Browser beim Tippen)
           updateSelectedNote({ content: html });
       }
   };
@@ -207,7 +204,6 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
   };
 
   const handlePaste = (e: React.ClipboardEvent) => {
-      // Handle Image Paste
       if (e.clipboardData.files.length > 0) {
           const file = e.clipboardData.files[0];
           if (file.type.startsWith('image/')) {
@@ -237,8 +233,9 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
 
   // Actions
   const handleScanInbox = async (isManual: boolean = true) => {
+    // Desktop Vault Check
     if (!VaultService.isConnected()) {
-        if (isManual) alert("Bitte verbinde zuerst den Vault im System-Tab (nur Desktop).");
+        if (isManual) alert("Verwende den 'Import' Button auf mobilen Geräten.");
         return; 
     }
 
@@ -276,6 +273,43 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
     } finally {
         setIsScanning(false);
     }
+  };
+
+  const handleMobileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!e.target.files || e.target.files.length === 0) return;
+      
+      setIsScanning(true);
+      setScanMessage({ text: "Importiere Dateien...", type: 'info' });
+
+      try {
+          const newDocs = await DocumentService.processManualUpload(e.target.files, data.categoryRules || {});
+          
+          if (newDocs.length > 0) {
+              const newNotes = { ...(data.notes || {}) };
+              // Also save the actual file data to IndexedDB since we don't have a Vault on mobile
+              for (const doc of newDocs) {
+                  newNotes[doc.id] = doc;
+                  // Note: Manual Import processFile creates the NoteDocument structure.
+                  // For images/PDFs on mobile we might want to store the blob in IDB if it's large, 
+                  // but currently processFile puts text content in 'content'.
+                  // If we want to view the original PDF later on mobile, we need to save the Blob.
+                  // For now, let's assume text extraction is the primary goal, or minimal file storage.
+                  // If needed, we could add: await DBService.saveFile(doc.id, file); 
+              }
+
+              onUpdate({ ...data, notes: newNotes });
+              const msg = `${newDocs.length} Dateien erfolgreich importiert!`;
+              setScanMessage({ text: msg, type: 'success' });
+              setSelectedCat('Inbox');
+          }
+      } catch (err: any) {
+          console.error(err);
+          alert("Fehler beim Import: " + err.message);
+      } finally {
+          setIsScanning(false);
+          setTimeout(() => setScanMessage(null), 3000);
+          e.target.value = ''; // Reset input
+      }
   };
 
   const handleReindex = async () => {
@@ -410,11 +444,38 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
   };
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden relative">
+    <div className="flex flex-col md:flex-row h-[calc(100vh-8rem)] bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden relative">
       
-      {/* 1. SIDEBAR */}
-      <div className="w-64 bg-gray-50 border-r border-gray-100 flex flex-col hidden md:flex">
-         <div className="p-4">
+      {/* 1. SIDEBAR (Desktop Only) / Mobile Toolbar */}
+      <div className={`w-full md:w-64 bg-gray-50 border-r border-gray-100 flex flex-col ${selectedNoteId ? 'hidden md:flex' : 'flex'}`}>
+         
+         {/* Mobile Toolbar Header */}
+         <div className="md:hidden p-3 border-b border-gray-100 flex gap-2">
+            <select 
+               value={selectedCat} 
+               onChange={(e) => setSelectedCat(e.target.value)} 
+               className="flex-1 bg-white border border-gray-200 rounded-lg px-2 py-2 text-sm font-bold"
+            >
+               <option value="All">Alle Kategorien</option>
+               {availableCategories.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <button 
+                onClick={() => mobileImportInputRef.current?.click()} 
+                className="p-2 bg-[#16325c] text-white rounded-lg shadow-sm"
+            >
+                <UploadCloud size={20} />
+            </button>
+            <button 
+                onClick={createNote} 
+                className="p-2 bg-blue-100 text-blue-600 rounded-lg shadow-sm"
+            >
+                <PenTool size={20} />
+            </button>
+            <input type="file" ref={mobileImportInputRef} multiple className="hidden" onChange={handleMobileImport} />
+         </div>
+
+         {/* Desktop Create Button */}
+         <div className="hidden md:block p-4">
             <button 
                 onClick={createNote}
                 className="w-full py-3 bg-[#16325c] text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-blue-900/10 hover:bg-blue-800 transition-all"
@@ -423,7 +484,8 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
             </button>
          </div>
          
-         <div className="flex-1 overflow-y-auto px-2 space-y-1">
+         {/* Categories List (Desktop) */}
+         <div className="hidden md:block flex-1 overflow-y-auto px-2 space-y-1">
             <button 
                 onClick={() => setSelectedCat('All')}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm font-bold transition-colors ${selectedCat === 'All' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:bg-gray-100'}`}
@@ -452,7 +514,8 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
             ))}
          </div>
 
-         <div className="p-4 border-t border-gray-100 bg-gray-50 space-y-2 relative">
+         {/* Desktop Vault/Scan Footer */}
+         <div className="hidden md:block p-4 border-t border-gray-100 bg-gray-50 space-y-2 relative">
             {scanMessage && (
                 <div className={`absolute bottom-full left-4 right-4 mb-2 p-3 text-xs font-bold rounded-xl shadow-lg flex items-center gap-2 z-20 ${scanMessage.type === 'warning' ? 'bg-orange-100 text-orange-700' : scanMessage.type === 'success' ? 'bg-green-500 text-white' : 'bg-blue-600 text-white'}`}>
                     {scanMessage.text}
@@ -464,12 +527,11 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
             <button onClick={handleReindex} disabled={isReindexing} className={`w-full py-2.5 border border-blue-200 bg-blue-50 text-blue-600 rounded-xl font-bold text-xs flex items-center justify-center gap-2 hover:bg-blue-100 transition-all ${isReindexing ? 'opacity-50 cursor-wait' : ''}`}>
                 {isReindexing ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />} Archive Sync
             </button>
-            {lastScanTime && <div className="text-[9px] text-gray-300 text-center font-mono pt-1">Last Scan: {lastScanTime}</div>}
          </div>
       </div>
 
       {/* 2. NOTE LIST */}
-      <div className="w-full md:w-80 border-r border-gray-100 flex flex-col bg-white">
+      <div className={`w-full md:w-80 border-r border-gray-100 flex flex-col bg-white ${selectedNoteId ? 'hidden md:flex' : 'flex'}`}>
          <div className="p-4 border-b border-gray-50">
             <div className="relative">
                 <Search size={16} className="absolute left-3 top-3 text-gray-400" />
@@ -496,39 +558,46 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
          </div>
       </div>
 
-      {/* 3. DETAIL / EDITOR */}
-      <div className="flex-1 flex flex-col bg-gray-50/30">
+      {/* 3. DETAIL / EDITOR - Mobile Overlay or Desktop Column */}
+      <div className={`flex-1 flex flex-col bg-gray-50/30 ${selectedNoteId ? 'fixed inset-0 z-20 bg-white md:static' : 'hidden md:flex'}`}>
          {selectedNote ? (
              <>
-                <div className="p-6 border-b border-gray-100 bg-white flex items-center justify-between shrink-0">
-                    <div className="flex-1 mr-4">
-                        <input 
-                            type="text" 
-                            value={selectedNote.title} 
-                            onChange={(e) => updateSelectedNote({ title: e.target.value })}
-                            className="text-xl font-black text-gray-800 bg-transparent outline-none w-full placeholder-gray-300"
-                            placeholder="Titel..."
-                        />
-                        <div className="flex items-center gap-2 mt-2 h-8">
-                            {isCreatingCat ? (
-                                <div className="flex items-center gap-1 animate-in slide-in-from-left-2 fade-in">
-                                    <input type="text" autoFocus value={newCatName} onChange={(e) => setNewCatName(e.target.value)} placeholder="Neue Kategorie..." className="text-xs bg-white border border-blue-300 text-gray-700 px-2 py-1 rounded-lg outline-none w-32 shadow-sm" onKeyDown={(e) => { if(e.key === 'Enter') changeCategory(newCatName); if(e.key === 'Escape') setIsCreatingCat(false); }}/>
-                                    <button onClick={() => changeCategory(newCatName)} className="p-1 bg-green-100 text-green-600 rounded hover:bg-green-200"><Check size={12}/></button>
-                                    <button onClick={() => setIsCreatingCat(false)} className="p-1 bg-gray-100 text-gray-500 rounded hover:bg-gray-200"><X size={12}/></button>
-                                </div>
-                            ) : (
-                                <>
-                                    <select value={selectedNote.category} onChange={(e) => changeCategory(e.target.value as DocCategory)} className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-lg outline-none cursor-pointer font-bold border border-transparent hover:border-gray-300 transition-colors" title="Kategorie ändern">
-                                        {availableCategories.map(c => <option key={c} value={c}>{c}</option>)}
-                                    </select>
-                                    <button onClick={() => { setIsCreatingCat(true); setNewCatName(''); }} className="p-1 text-blue-500 hover:bg-blue-50 rounded"><Plus size={14} /></button>
-                                </>
-                            )}
-                            <div className="w-px h-4 bg-gray-200 mx-1"></div>
-                            <span className="text-[10px] text-gray-400 uppercase tracking-widest font-mono">{selectedNote.year}</span>
+                <div className="p-4 md:p-6 border-b border-gray-100 bg-white flex items-center justify-between shrink-0 safe-area-top">
+                    <div className="flex items-center gap-3 flex-1 mr-4 overflow-hidden">
+                        {/* Mobile Back Button */}
+                        <button onClick={() => setSelectedNoteId(null)} className="md:hidden p-2 -ml-2 text-gray-500 hover:bg-gray-100 rounded-full">
+                           <ArrowLeft size={20} />
+                        </button>
+                        
+                        <div className="flex-1 min-w-0">
+                            <input 
+                                type="text" 
+                                value={selectedNote.title} 
+                                onChange={(e) => updateSelectedNote({ title: e.target.value })}
+                                className="text-lg md:text-xl font-black text-gray-800 bg-transparent outline-none w-full placeholder-gray-300 truncate"
+                                placeholder="Titel..."
+                            />
+                            <div className="flex items-center gap-2 mt-1 md:mt-2 h-8 overflow-x-auto no-scrollbar">
+                                {isCreatingCat ? (
+                                    <div className="flex items-center gap-1 animate-in slide-in-from-left-2 fade-in">
+                                        <input type="text" autoFocus value={newCatName} onChange={(e) => setNewCatName(e.target.value)} placeholder="Neue Kat..." className="text-xs bg-white border border-blue-300 text-gray-700 px-2 py-1 rounded-lg outline-none w-24 md:w-32 shadow-sm" onKeyDown={(e) => { if(e.key === 'Enter') changeCategory(newCatName); if(e.key === 'Escape') setIsCreatingCat(false); }}/>
+                                        <button onClick={() => changeCategory(newCatName)} className="p-1 bg-green-100 text-green-600 rounded hover:bg-green-200"><Check size={12}/></button>
+                                        <button onClick={() => setIsCreatingCat(false)} className="p-1 bg-gray-100 text-gray-500 rounded hover:bg-gray-200"><X size={12}/></button>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <select value={selectedNote.category} onChange={(e) => changeCategory(e.target.value as DocCategory)} className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-lg outline-none cursor-pointer font-bold border border-transparent hover:border-gray-300 transition-colors" title="Kategorie ändern">
+                                            {availableCategories.map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                        <button onClick={() => { setIsCreatingCat(true); setNewCatName(''); }} className="p-1 text-blue-500 hover:bg-blue-50 rounded"><Plus size={14} /></button>
+                                    </>
+                                )}
+                                <div className="w-px h-4 bg-gray-200 mx-1"></div>
+                                <span className="text-[10px] text-gray-400 uppercase tracking-widest font-mono shrink-0">{selectedNote.year}</span>
+                            </div>
                         </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1 md:gap-2">
                         {selectedNote.filePath && (
                             <button onClick={openFile} className="p-2 text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors" title="Dokument Öffnen"><Eye size={18} /></button>
                         )}
@@ -541,7 +610,7 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
                     {selectedNote.type === 'note' ? (
                         <div className="flex flex-col h-full bg-white">
                             {/* Toolbar */}
-                            <div className="flex items-center gap-1 p-2 bg-gray-50 border-b border-gray-100 overflow-x-auto flex-nowrap shrink-0">
+                            <div className="flex items-center gap-1 p-2 bg-gray-50 border-b border-gray-100 overflow-x-auto flex-nowrap shrink-0 no-scrollbar">
                                 <button onClick={() => execCmd('undo')} className="p-1.5 hover:bg-gray-200 rounded text-gray-600" title="Rückgängig"><Undo size={14}/></button>
                                 <button onClick={() => execCmd('redo')} className="p-1.5 hover:bg-gray-200 rounded text-gray-600 mr-2" title="Wiederholen"><Redo size={14}/></button>
                                 
@@ -550,33 +619,17 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
                                 <button onClick={() => execCmd('bold')} className="p-1.5 hover:bg-gray-200 rounded text-gray-700 font-bold" title="Fett"><Bold size={14}/></button>
                                 <button onClick={() => execCmd('italic')} className="p-1.5 hover:bg-gray-200 rounded text-gray-700 italic" title="Kursiv"><Italic size={14}/></button>
                                 <button onClick={() => execCmd('underline')} className="p-1.5 hover:bg-gray-200 rounded text-gray-700 underline" title="Unterstrichen"><Underline size={14}/></button>
-                                <button onClick={() => execCmd('strikeThrough')} className="p-1.5 hover:bg-gray-200 rounded text-gray-700 line-through" title="Durchgestrichen"><Strikethrough size={14}/></button>
                                 
                                 <div className="w-px h-4 bg-gray-300 mx-1"></div>
 
-                                <button onClick={() => execCmd('foreColor', '#ef4444')} className="p-1.5 hover:bg-gray-200 rounded text-red-500" title="Text Rot"><Palette size={14}/></button>
-                                <button onClick={() => execCmd('foreColor', '#3b82f6')} className="p-1.5 hover:bg-gray-200 rounded text-blue-500" title="Text Blau"><Palette size={14}/></button>
-                                <button onClick={() => execCmd('foreColor', '#10b981')} className="p-1.5 hover:bg-gray-200 rounded text-green-500" title="Text Grün"><Palette size={14}/></button>
-                                <button onClick={() => execCmd('removeFormat')} className="p-1.5 hover:bg-gray-200 rounded text-gray-400" title="Formatierung entfernen"><X size={14}/></button>
-
-                                <div className="w-px h-4 bg-gray-300 mx-1"></div>
-
-                                <button onClick={() => execCmd('justifyLeft')} className="p-1.5 hover:bg-gray-200 rounded text-gray-600" title="Links"><AlignLeft size={14}/></button>
-                                <button onClick={() => execCmd('justifyCenter')} className="p-1.5 hover:bg-gray-200 rounded text-gray-600" title="Zentriert"><AlignCenter size={14}/></button>
                                 <button onClick={() => execCmd('insertUnorderedList')} className="p-1.5 hover:bg-gray-200 rounded text-gray-600" title="Liste"><List size={14}/></button>
                                 
-                                <div className="w-px h-4 bg-gray-300 mx-1"></div>
-
-                                <button onClick={() => execCmd('indent')} className="p-1.5 hover:bg-gray-200 rounded text-gray-600" title="Einrücken"><Indent size={14}/></button>
-                                <button onClick={() => execCmd('outdent')} className="p-1.5 hover:bg-gray-200 rounded text-gray-600" title="Ausrücken"><Outdent size={14}/></button>
-
                                 <div className="w-px h-4 bg-gray-300 mx-1"></div>
 
                                 <label className="p-1.5 hover:bg-gray-200 rounded text-gray-600 cursor-pointer flex items-center gap-1" title="Bild einfügen">
                                     <ImagePlus size={14}/>
                                     <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
                                 </label>
-                                <button onClick={insertTable} className="p-1.5 hover:bg-gray-200 rounded text-gray-600" title="Tabelle einfügen"><TableIcon size={14}/></button>
                             </div>
 
                             {/* Editable Area */}
@@ -585,11 +638,10 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
                                 contentEditable
                                 onInput={handleEditorInput}
                                 onPaste={handlePaste}
-                                className="flex-1 p-8 outline-none overflow-y-auto text-gray-800 leading-relaxed text-sm prose max-w-none"
+                                className="flex-1 p-4 md:p-8 outline-none overflow-y-auto text-gray-800 leading-relaxed text-sm prose max-w-none"
                                 style={{ minHeight: '100px' }}
                             />
-                            <div className="p-2 border-t border-gray-100 bg-gray-50 text-[10px] text-gray-400 flex justify-between">
-                                <span>Paste Screenshots mit STRG+V</span>
+                            <div className="p-2 border-t border-gray-100 bg-gray-50 text-[10px] text-gray-400 flex justify-between safe-area-bottom">
                                 <span>{stripHtml(selectedNote.content).length} Zeichen</span>
                             </div>
                         </div>
@@ -604,9 +656,11 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
                                             <h5 className="text-sm font-bold text-blue-700">Archiviertes Dokument</h5>
                                             <p className="text-xs text-blue-600 mt-1">
                                                 Datei: <span className="font-mono">{selectedNote.fileName}</span><br/>
-                                                Pfad: <span className="font-mono">{selectedNote.filePath}</span>
+                                                Pfad: <span className="font-mono">{selectedNote.filePath || '(Lokal gespeichert)'}</span>
                                             </p>
-                                            <button onClick={openFile} className="mt-3 text-xs bg-blue-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-700 transition-colors">Dokument Ansehen</button>
+                                            {selectedNote.filePath && (
+                                                <button onClick={openFile} className="mt-3 text-xs bg-blue-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-700 transition-colors">Dokument Ansehen</button>
+                                            )}
                                         </div>
                                     </div>
                                     <div className="space-y-2">
@@ -623,7 +677,9 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
                                         <h3 className="text-xl font-black text-gray-800">{selectedNote.type === 'word' ? 'Word Dokument' : 'Excel Tabelle'}</h3>
                                         <p className="text-sm text-gray-400 max-w-md mx-auto">Inhalt extrahiert:<br/><span className="font-mono text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded mt-2 inline-block max-w-xs truncate">{selectedNote.content.substring(0,50)}...</span></p>
                                     </div>
-                                    <button onClick={openFile} className="px-8 py-3 bg-[#16325c] text-white rounded-xl font-bold shadow-xl flex items-center gap-2"><Download size={18} /> Datei Öffnen</button>
+                                    {selectedNote.filePath && (
+                                        <button onClick={openFile} className="px-8 py-3 bg-[#16325c] text-white rounded-xl font-bold shadow-xl flex items-center gap-2"><Download size={18} /> Datei Öffnen</button>
+                                    )}
                                 </div>
                             )}
                         </div>
@@ -631,7 +687,7 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
                 </div>
              </>
          ) : (
-             <div className="flex-1 flex flex-col items-center justify-center text-gray-300">
+             <div className="flex-1 flex flex-col items-center justify-center text-gray-300 hidden md:flex">
                  <FileText size={64} className="mb-4 opacity-20" />
                  <p className="text-sm font-bold uppercase tracking-widest">Wähle eine Notiz</p>
              </div>
@@ -640,7 +696,7 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
 
       {/* MODAL: MANAGE RULES */}
       {ruleModalCat && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-900/40 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-900/40 backdrop-blur-sm animate-in fade-in duration-200 p-4">
               <div className="bg-white rounded-2xl shadow-2xl p-6 w-96 max-w-full space-y-4 animate-in zoom-in-95 duration-200">
                   <div className="flex items-center justify-between border-b border-gray-100 pb-4">
                       <div className="flex items-center gap-2"><Tag size={18} className="text-blue-500" /><div><h3 className="font-bold text-gray-800">Stichwörter</h3><p className="text-xs text-gray-400">Für Kategorie: <span className="font-bold text-blue-600">{ruleModalCat}</span></p></div></div>

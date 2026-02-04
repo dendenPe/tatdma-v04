@@ -193,7 +193,80 @@ export class DocumentService {
   }
 
   /**
-   * Scans Inbox
+   * Process a single file into a NoteDocument (Shared Logic)
+   */
+  static async processFile(file: File, userRules: Record<string, string[]> = {}): Promise<NoteDocument> {
+    const ext = file.name.split('.').pop()?.toLowerCase() || '';
+    let content = "";
+    let docType: NoteDocument['type'] = 'other';
+
+    if (file.type === 'application/pdf' || ext === 'pdf') {
+        docType = 'pdf';
+        content = await this.extractTextFromPdf(file);
+    } 
+    else if (file.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'heic'].includes(ext)) {
+        docType = 'image';
+        content = await this.performOCR(file);
+    }
+    else if (['doc', 'docx'].includes(ext)) {
+        docType = 'word';
+        content = await this.extractTextFromWord(file);
+        if (!content) content = file.name;
+    }
+    else if (['xls', 'xlsx', 'csv'].includes(ext)) {
+        docType = 'excel';
+        content = await this.extractTextFromExcel(file);
+        if (!content) content = file.name;
+    }
+    else if (['pages'].includes(ext)) {
+        docType = 'word'; 
+        content = `Apple Pages: ${file.name}`;
+    }
+    else if (['txt', 'md', 'json', 'log'].includes(ext)) {
+        docType = 'note';
+        try { content = await file.text(); } catch {}
+    }
+    else {
+        content = file.name;
+    }
+
+    const category = this.categorizeText(content, file.name, userRules);
+    const year = this.extractYear(content) || new Date().getFullYear().toString();
+    const id = `doc_${Date.now()}_${Math.random().toString(36).substr(2,5)}`;
+
+    return {
+        id,
+        title: file.name,
+        type: docType,
+        category,
+        year,
+        created: new Date().toISOString(),
+        content: content,
+        fileName: file.name,
+        // No filePath for manual uploads, implies local storage only
+        tags: [],
+        isNew: true
+    };
+  }
+
+  /**
+   * MANUAL IMPORT (Mobile / Non-Vault)
+   */
+  static async processManualUpload(files: FileList, userRules: Record<string, string[]> = {}): Promise<NoteDocument[]> {
+      const docs: NoteDocument[] = [];
+      for (let i = 0; i < files.length; i++) {
+          try {
+              const doc = await this.processFile(files[i], userRules);
+              docs.push(doc);
+          } catch (e) {
+              console.error(`Failed to process ${files[i].name}`, e);
+          }
+      }
+      return docs;
+  }
+
+  /**
+   * Scans Inbox (Desktop Vault only)
    */
   static async scanInbox(
       currentNotes: Record<string, NoteDocument>, 
@@ -214,57 +287,21 @@ export class DocumentService {
 
     // @ts-ignore
     for await (const entry of inboxHandle.values()) {
-        
-        // Handle Files
         if (entry.kind === 'file' && entry.name !== '.DS_Store') {
             const fileHandle = entry as FileSystemFileHandle;
             const file = await fileHandle.getFile();
             
             if (file.size > 50 * 1024 * 1024) continue;
 
-            const ext = file.name.split('.').pop()?.toLowerCase() || '';
-            let content = "";
-            let docType: NoteDocument['type'] = 'other';
-
-            if (file.type === 'application/pdf' || ext === 'pdf') {
-                docType = 'pdf';
-                content = await this.extractTextFromPdf(file);
-            } 
-            else if (file.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'heic'].includes(ext)) {
-                docType = 'image';
-                content = await this.performOCR(file);
-            }
-            else if (['doc', 'docx'].includes(ext)) {
-                docType = 'word';
-                content = await this.extractTextFromWord(file);
-                if (!content) content = file.name; // Fallback
-            }
-            else if (['xls', 'xlsx', 'csv'].includes(ext)) {
-                docType = 'excel';
-                content = await this.extractTextFromExcel(file);
-                if (!content) content = file.name;
-            }
-            else if (['pages'].includes(ext)) {
-                docType = 'word'; 
-                content = `Apple Pages: ${file.name}`;
-            }
-            else if (['txt', 'md', 'json', 'log'].includes(ext)) {
-                docType = 'note';
-                try { content = await file.text(); } catch {}
-            }
-            else {
-                content = file.name;
-            }
-
-            const category = this.categorizeText(content, file.name, userRules);
-            const year = this.extractYear(content) || new Date().getFullYear().toString();
-            const id = `doc_${Date.now()}_${Math.random().toString(36).substr(2,5)}`;
-
             try {
+                // Reuse processFile logic
+                const doc = await this.processFile(file, userRules);
+                
+                // --- VAULT SPECIFIC: MOVE FILE ---
                 // @ts-ignore
-                const yearDir = await archiveHandle.getDirectoryHandle(year, { create: true });
+                const yearDir = await archiveHandle.getDirectoryHandle(doc.year, { create: true });
                 // @ts-ignore
-                const catDir = await yearDir.getDirectoryHandle(category, { create: true });
+                const catDir = await yearDir.getDirectoryHandle(doc.category, { create: true });
                 // @ts-ignore
                 const newFileHandle = await catDir.getFileHandle(file.name, { create: true });
                 // @ts-ignore
@@ -274,20 +311,10 @@ export class DocumentService {
                 // @ts-ignore
                 await inboxHandle.removeEntry(file.name);
 
-                newDocs.push({
-                    id,
-                    title: file.name,
-                    type: docType,
-                    category,
-                    year,
-                    created: new Date().toISOString(),
-                    content: content,
-                    fileName: file.name,
-                    filePath: `_ARCHIVE/${year}/${category}/${file.name}`,
-                    tags: [],
-                    isNew: true
-                });
+                // Add path
+                doc.filePath = `_ARCHIVE/${doc.year}/${doc.category}/${file.name}`;
                 
+                newDocs.push(doc);
                 movedCount++;
 
             } catch (err) {
@@ -299,6 +326,7 @@ export class DocumentService {
     return { newDocs, movedCount };
   }
 
+  // ... (Rest of RebuildIndex / Move / Get methods remain same)
   /**
    * Rebuilds Index and forces re-read of content for existing files
    */
@@ -350,7 +378,6 @@ export class DocumentService {
                                         content = await this.extractTextFromExcel(file);
                                     }
                                     else if (docType === 'pdf') {
-                                        // Only re-parse if strictly necessary to save performance, or assume fast PDF
                                         content = await this.extractTextFromPdf(file);
                                     }
                                 } catch (e) {
@@ -387,7 +414,6 @@ export class DocumentService {
     return recoveredDocs;
   }
 
-  // File Move & Get implementation
   static async moveFile(doc: NoteDocument, newCategory: DocCategory): Promise<NoteDocument> {
       if (!VaultService.isConnected() || !doc.filePath) return { ...doc, category: newCategory };
       if (doc.category === newCategory) return doc; 
