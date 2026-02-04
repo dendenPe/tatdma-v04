@@ -489,10 +489,10 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
   };
 
   return (
-    <div className="flex flex-col md:flex-row h-[calc(100vh-8rem)] bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden relative">
+    <div className="flex flex-col md:flex-row h-[calc(100dvh-10rem)] md:h-[calc(100vh-8rem)] bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden relative">
       
       {/* 1. SIDEBAR (Desktop Only) / Mobile Toolbar */}
-      <div className={`w-full md:w-64 bg-gray-50 border-r border-gray-100 flex flex-col ${selectedNoteId ? 'hidden md:flex' : 'flex'}`}>
+      <div className={`w-full md:w-64 bg-gray-50 border-r border-gray-100 flex flex-col shrink-0 ${selectedNoteId ? 'hidden md:flex' : 'flex'}`}>
          
          {/* Mobile Toolbar Header */}
          <div className="md:hidden p-3 border-b border-gray-100 flex gap-2">
@@ -595,14 +595,14 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
       </div>
 
       {/* 2. NOTE LIST */}
-      <div className={`w-full md:w-80 border-r border-gray-100 flex flex-col bg-white ${selectedNoteId ? 'hidden md:flex' : 'flex'}`}>
-         <div className="p-4 border-b border-gray-50">
+      <div className={`w-full md:w-80 border-r border-gray-100 flex flex-col flex-1 min-h-0 bg-white ${selectedNoteId ? 'hidden md:flex' : 'flex'}`}>
+         <div className="p-4 border-b border-gray-50 shrink-0">
             <div className="relative">
                 <Search size={16} className="absolute left-3 top-3 text-gray-400" />
                 <input type="text" placeholder="Suchen..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full pl-9 pr-4 py-2.5 bg-gray-50 border border-gray-100 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-50 transition-all"/>
             </div>
          </div>
-         <div className="flex-1 overflow-y-auto">
+         <div className="flex-1 overflow-y-auto min-h-0">
             {filteredNotes.map(note => (
                 <div key={note.id} onClick={() => setSelectedNoteId(note.id)} className={`p-4 border-b border-gray-50 cursor-pointer hover:bg-gray-50 transition-colors ${selectedNoteId === note.id ? 'bg-blue-50/50 border-l-4 border-l-blue-500' : 'border-l-4 border-l-transparent'}`}>
                     <div className="flex items-start justify-between mb-1">
