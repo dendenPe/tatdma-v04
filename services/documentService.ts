@@ -6,9 +6,11 @@ import { createWorker } from 'tesseract.js';
 import * as mammoth from 'mammoth';
 // @ts-ignore
 import * as XLSX from 'xlsx';
+import JSZip from 'jszip';
 
 import { NoteDocument, DocCategory, AppData } from '../types';
 import { VaultService } from './vaultService';
+import { DBService } from './dbService';
 
 // Set Worker manually for vite/browser environment
 // @ts-ignore
@@ -47,7 +49,7 @@ export class DocumentService {
   /**
    * Extracts text from Word documents (.docx) using Mammoth
    */
-  static async extractTextFromWord(file: File): Promise<string> {
+  static async extractTextFromWord(file: File | Blob): Promise<string> {
       try {
           const arrayBuffer = await file.arrayBuffer();
           
@@ -78,7 +80,7 @@ export class DocumentService {
   /**
    * Extracts text from Excel spreadsheets (.xlsx, .xls) using SheetJS
    */
-  static async extractTextFromExcel(file: File): Promise<string> {
+  static async extractTextFromExcel(file: File | Blob): Promise<string> {
       try {
           const arrayBuffer = await file.arrayBuffer();
           // @ts-ignore
@@ -194,9 +196,11 @@ export class DocumentService {
 
   /**
    * Process a single file into a NoteDocument (Shared Logic)
+   * If forcedMetadata is provided, it skips auto-categorization/year guess
    */
-  static async processFile(file: File, userRules: Record<string, string[]> = {}): Promise<NoteDocument> {
-    const ext = file.name.split('.').pop()?.toLowerCase() || '';
+  static async processFile(file: File | Blob, userRules: Record<string, string[]> = {}, fileNameOverride?: string, forcedMetadata?: { year?: string, category?: string }): Promise<NoteDocument> {
+    const name = fileNameOverride || (file as File).name || 'Unknown';
+    const ext = name.split('.').pop()?.toLowerCase() || '';
     let content = "";
     let docType: NoteDocument['type'] = 'other';
 
@@ -211,38 +215,38 @@ export class DocumentService {
     else if (['doc', 'docx'].includes(ext)) {
         docType = 'word';
         content = await this.extractTextFromWord(file);
-        if (!content) content = file.name;
+        if (!content) content = name;
     }
     else if (['xls', 'xlsx', 'csv'].includes(ext)) {
         docType = 'excel';
         content = await this.extractTextFromExcel(file);
-        if (!content) content = file.name;
+        if (!content) content = name;
     }
     else if (['pages'].includes(ext)) {
         docType = 'word'; 
-        content = `Apple Pages: ${file.name}`;
+        content = `Apple Pages: ${name}`;
     }
     else if (['txt', 'md', 'json', 'log'].includes(ext)) {
         docType = 'note';
         try { content = await file.text(); } catch {}
     }
     else {
-        content = file.name;
+        content = name;
     }
 
-    const category = this.categorizeText(content, file.name, userRules);
-    const year = this.extractYear(content) || new Date().getFullYear().toString();
+    const category = forcedMetadata?.category || this.categorizeText(content, name, userRules);
+    const year = forcedMetadata?.year || this.extractYear(content) || new Date().getFullYear().toString();
     const id = `doc_${Date.now()}_${Math.random().toString(36).substr(2,5)}`;
 
     return {
         id,
-        title: file.name,
+        title: name,
         type: docType,
         category,
         year,
         created: new Date().toISOString(),
         content: content,
-        fileName: file.name,
+        fileName: name,
         // No filePath for manual uploads, implies local storage only
         tags: [],
         isNew: true
@@ -251,17 +255,87 @@ export class DocumentService {
 
   /**
    * MANUAL IMPORT (Mobile / Non-Vault)
+   * SAVES FILE TO INDEXEDDB
    */
   static async processManualUpload(files: FileList, userRules: Record<string, string[]> = {}): Promise<NoteDocument[]> {
       const docs: NoteDocument[] = [];
       for (let i = 0; i < files.length; i++) {
           try {
-              const doc = await this.processFile(files[i], userRules);
+              const file = files[i];
+              const doc = await this.processFile(file, userRules);
+              
+              // CRITICAL for Mobile: Save binary to DB so we can open it later
+              await DBService.saveFile(doc.id, file);
+              
               docs.push(doc);
           } catch (e) {
               console.error(`Failed to process ${files[i].name}`, e);
           }
       }
+      return docs;
+  }
+
+  /**
+   * IMPORT FROM ZIP ARCHIVE (Mobile Folder Import)
+   */
+  static async processArchiveZip(zipFile: File, userRules: Record<string, string[]> = {}): Promise<NoteDocument[]> {
+      const zip = await JSZip.loadAsync(zipFile);
+      const docs: NoteDocument[] = [];
+
+      for (const [relativePath, entry] of Object.entries(zip.files)) {
+          const zipEntry = entry as JSZip.JSZipObject;
+          if (zipEntry.dir) continue;
+          if (relativePath.includes('__MACOSX') || relativePath.includes('.DS_Store')) continue;
+          
+          // Try to extract metadata from path: e.g., "_ARCHIVE/2023/Rechnungen/file.pdf"
+          const parts = relativePath.split('/');
+          const fileName = parts.pop() || relativePath;
+          
+          let forcedMetadata: { year?: string, category?: string } | undefined = undefined;
+          
+          // Simple heuristic: if we find a year and a known category in path
+          let foundYear = undefined;
+          let foundCat = undefined;
+
+          // Check parts for Year
+          for(const p of parts) {
+             if (p.match(/^202[0-9]$/)) foundYear = p;
+          }
+
+          // Check parts for Category
+          for(const p of parts) {
+             const lowerP = p.toLowerCase();
+             // Check against default rules values
+             const knownCats = Object.values(this.defaultRules);
+             // Or check if path part matches a known category name directly
+             if (knownCats.includes(p)) foundCat = p;
+             
+             // Check keys
+             if (!foundCat) {
+                 for(const [key, val] of Object.entries(this.defaultRules)) {
+                     if (lowerP.includes(key)) { foundCat = val; break; }
+                 }
+             }
+          }
+
+          if (foundYear || foundCat) {
+              forcedMetadata = { year: foundYear, category: foundCat };
+          }
+
+          try {
+              const blob = await zipEntry.async("blob");
+              // Create a File-like object or just pass blob
+              const doc = await this.processFile(blob, userRules, fileName, forcedMetadata);
+              
+              // Save to IDB
+              await DBService.saveFile(doc.id, blob);
+              
+              docs.push(doc);
+          } catch (e) {
+              console.error(`Failed to process zip entry ${relativePath}`, e);
+          }
+      }
+      
       return docs;
   }
 

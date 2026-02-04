@@ -46,7 +46,8 @@ import {
   Redo,
   ImagePlus,
   ArrowLeft,
-  UploadCloud
+  UploadCloud,
+  FileArchive
 } from 'lucide-react';
 import { AppData, NoteDocument, DocCategory } from '../types';
 import { DocumentService } from '../services/documentService';
@@ -90,6 +91,7 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
   const editorRef = useRef<HTMLDivElement>(null);
   const lastNoteIdRef = useRef<string | null>(null);
   const mobileImportInputRef = useRef<HTMLInputElement>(null);
+  const zipImportInputRef = useRef<HTMLInputElement>(null);
 
   // Derived Data
   const notesList = Object.values(data.notes || {}).sort((a, b) => new Date(b.created).getTime() - new Date(a.created).getTime());
@@ -286,15 +288,8 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
           
           if (newDocs.length > 0) {
               const newNotes = { ...(data.notes || {}) };
-              // Also save the actual file data to IndexedDB since we don't have a Vault on mobile
               for (const doc of newDocs) {
                   newNotes[doc.id] = doc;
-                  // Note: Manual Import processFile creates the NoteDocument structure.
-                  // For images/PDFs on mobile we might want to store the blob in IDB if it's large, 
-                  // but currently processFile puts text content in 'content'.
-                  // If we want to view the original PDF later on mobile, we need to save the Blob.
-                  // For now, let's assume text extraction is the primary goal, or minimal file storage.
-                  // If needed, we could add: await DBService.saveFile(doc.id, file); 
               }
 
               onUpdate({ ...data, notes: newNotes });
@@ -309,6 +304,41 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
           setIsScanning(false);
           setTimeout(() => setScanMessage(null), 3000);
           e.target.value = ''; // Reset input
+      }
+  };
+
+  // NEW: HANDLE ZIP ARCHIVE IMPORT
+  const handleZipImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      
+      setIsScanning(true);
+      setScanMessage({ text: "Entpacke Archiv...", type: 'info' });
+
+      try {
+          const newDocs = await DocumentService.processArchiveZip(file, data.categoryRules || {});
+          
+          if (newDocs.length > 0) {
+              const newNotes = { ...(data.notes || {}) };
+              for (const doc of newDocs) {
+                  newNotes[doc.id] = doc;
+              }
+              onUpdate({ ...data, notes: newNotes });
+              const msg = `${newDocs.length} Dateien aus ZIP wiederhergestellt!`;
+              setScanMessage({ text: msg, type: 'success' });
+              setSelectedCat('All');
+          } else {
+              alert("Keine gültigen Dateien im ZIP gefunden.");
+              setScanMessage(null);
+          }
+      } catch (err: any) {
+          console.error(err);
+          alert("Fehler beim ZIP Import: " + err.message);
+          setScanMessage(null);
+      } finally {
+          setIsScanning(false);
+          setTimeout(() => setScanMessage(null), 4000);
+          e.target.value = '';
       }
   };
 
@@ -393,14 +423,29 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
   };
 
   const openFile = async () => {
-      if (!selectedNote?.filePath) return;
-      const blob = await DocumentService.getFileFromVault(selectedNote.filePath);
-      if (blob) {
-          const url = URL.createObjectURL(blob);
-          window.open(url, '_blank');
-      } else {
-          alert("Datei nicht gefunden: " + selectedNote.filePath);
+      if (!selectedNote) return;
+
+      // 1. Try Vault (Desktop)
+      if (selectedNote.filePath && VaultService.isConnected()) {
+          const blob = await DocumentService.getFileFromVault(selectedNote.filePath);
+          if (blob) {
+              const url = URL.createObjectURL(blob);
+              window.open(url, '_blank');
+              return;
+          }
       }
+
+      // 2. Try IndexedDB (Mobile Import / Local)
+      try {
+          const blob = await DBService.getFile(selectedNote.id);
+          if (blob) {
+             const url = URL.createObjectURL(blob);
+             window.open(url, '_blank');
+             return;
+          }
+      } catch (e) { console.error(e); }
+
+      alert("Datei nicht gefunden. (Nicht im Vault und nicht lokal gespeichert)");
   };
 
   const addKeyword = () => {
@@ -459,23 +504,36 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
                <option value="All">Alle Kategorien</option>
                {availableCategories.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
+            
+            {/* ZIP Import Mobile */}
+            <button 
+                onClick={() => zipImportInputRef.current?.click()} 
+                className="p-2 bg-purple-100 text-purple-600 rounded-lg shadow-sm"
+                title="ZIP Archiv importieren"
+            >
+                <FileArchive size={20} />
+            </button>
+            <input type="file" ref={zipImportInputRef} accept=".zip" className="hidden" onChange={handleZipImport} />
+
             <button 
                 onClick={() => mobileImportInputRef.current?.click()} 
                 className="p-2 bg-[#16325c] text-white rounded-lg shadow-sm"
+                title="Dateien importieren"
             >
                 <UploadCloud size={20} />
             </button>
+            <input type="file" ref={mobileImportInputRef} multiple className="hidden" onChange={handleMobileImport} />
+
             <button 
                 onClick={createNote} 
                 className="p-2 bg-blue-100 text-blue-600 rounded-lg shadow-sm"
             >
                 <PenTool size={20} />
             </button>
-            <input type="file" ref={mobileImportInputRef} multiple className="hidden" onChange={handleMobileImport} />
          </div>
 
          {/* Desktop Create Button */}
-         <div className="hidden md:block p-4">
+         <div className="hidden md:block p-4 space-y-2">
             <button 
                 onClick={createNote}
                 className="w-full py-3 bg-[#16325c] text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-blue-900/10 hover:bg-blue-800 transition-all"
@@ -521,6 +579,12 @@ const NotesView: React.FC<Props> = ({ data, onUpdate }) => {
                     {scanMessage.text}
                 </div>
             )}
+            
+            {/* Desktop ZIP Import Button added here too */}
+             <button onClick={() => zipImportInputRef.current?.click()} disabled={isScanning} className="w-full py-2.5 border border-purple-200 bg-purple-50 text-purple-600 rounded-xl font-bold text-xs flex items-center justify-center gap-2 hover:bg-purple-100 transition-all">
+                <FileArchive size={14} /> ZIP Archiv Import
+            </button>
+
             <button onClick={() => handleScanInbox(true)} disabled={isScanning} className={`w-full py-2.5 border border-gray-200 bg-white text-gray-600 rounded-xl font-bold text-xs flex items-center justify-center gap-2 hover:bg-gray-50 transition-all ${isScanning ? 'opacity-50 cursor-wait' : ''}`}>
                 {isScanning ? <Loader2 size={14} className="animate-spin" /> : <ScanLine size={14} />} Inbox Scannen
             </button>
