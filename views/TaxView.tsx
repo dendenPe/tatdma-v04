@@ -485,101 +485,103 @@ const TaxView: React.FC<Props> = ({ data, onUpdate, globalYear }) => {
           </div>
 
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-             <table className="w-full text-left">
-                <thead className="bg-gray-50 text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] border-b border-gray-100">
-                   <tr>
-                      <th className="px-6 py-4">Beschreibung</th>
-                      <th className="px-6 py-4">Kategorie</th>
-                      <th className="px-6 py-4 text-center">Relevant?</th>
-                      <th className="px-6 py-4 text-right">Betrag</th>
-                      <th className="px-6 py-4 text-center">Währ.</th>
-                      <th className="px-6 py-4 text-right text-blue-600">Wert (CHF)</th>
-                      <th className="px-6 py-4 text-center">Beleg</th>
-                      <th className="px-6 py-4 text-right">Löschen</th>
-                   </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                   {yearExpenses.map((exp, idx) => {
-                      const realIdx = data.tax.expenses.indexOf(exp);
-                      const isSpecial = exp.cat === 'Alimente' || exp.cat === 'Kindesunterhalt';
-                      const isLockedRelevant = isSpecial; // Alimony is always relevant
-                      // Safely access receipts with fallback
-                      const hasReceipts = (exp.receipts || []).length > 0;
+             <div className="overflow-x-auto">
+                <table className="w-full text-left min-w-[1000px]">
+                    <thead className="bg-gray-50 text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] border-b border-gray-100">
+                    <tr>
+                        <th className="px-6 py-4">Beschreibung</th>
+                        <th className="px-6 py-4">Kategorie</th>
+                        <th className="px-6 py-4 text-center">Relevant?</th>
+                        <th className="px-6 py-4 text-right">Betrag</th>
+                        <th className="px-6 py-4 text-center">Währ.</th>
+                        <th className="px-6 py-4 text-right text-blue-600">Wert (CHF)</th>
+                        <th className="px-6 py-4 text-center">Beleg</th>
+                        <th className="px-6 py-4 text-right">Löschen</th>
+                    </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                    {yearExpenses.map((exp, idx) => {
+                        const realIdx = data.tax.expenses.indexOf(exp);
+                        const isSpecial = exp.cat === 'Alimente' || exp.cat === 'Kindesunterhalt';
+                        const isLockedRelevant = isSpecial; // Alimony is always relevant
+                        // Safely access receipts with fallback
+                        const hasReceipts = (exp.receipts || []).length > 0;
 
-                      return (
-                        <tr key={realIdx} className={`hover:bg-gray-50/50 transition-colors ${!exp.taxRelevant ? 'opacity-50' : ''}`}>
-                           <td className="px-6 py-4 flex items-center gap-2">
-                              <input 
-                                type="text" 
-                                value={exp.desc} 
-                                onChange={(e) => updateExpense(realIdx, 'desc', e.target.value)} 
-                                className="w-full bg-transparent font-bold text-gray-800 outline-none text-sm placeholder-gray-300" 
-                                placeholder="Belegname..."
-                                style={{ colorScheme: 'light' }}
-                              />
-                              {isSpecial && (
-                                <button onClick={() => setSpecialExpenseModalIdx(realIdx)} className="p-1.5 text-blue-500 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors">
-                                  <Settings size={14} />
+                        return (
+                            <tr key={realIdx} className={`hover:bg-gray-50/50 transition-colors ${!exp.taxRelevant ? 'opacity-50' : ''}`}>
+                            <td className="px-6 py-4 flex items-center gap-2">
+                                <input 
+                                    type="text" 
+                                    value={exp.desc} 
+                                    onChange={(e) => updateExpense(realIdx, 'desc', e.target.value)} 
+                                    className="w-full bg-transparent font-bold text-gray-800 outline-none text-sm placeholder-gray-300" 
+                                    placeholder="Belegname..."
+                                    style={{ colorScheme: 'light' }}
+                                />
+                                {isSpecial && (
+                                    <button onClick={() => setSpecialExpenseModalIdx(realIdx)} className="p-1.5 text-blue-500 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors">
+                                    <Settings size={14} />
+                                    </button>
+                                )}
+                            </td>
+                            <td className="px-6 py-4">
+                                <select 
+                                    value={exp.cat} 
+                                    onChange={(e) => updateExpense(realIdx, 'cat', e.target.value)} 
+                                    className="bg-transparent text-[10px] font-black uppercase text-blue-600 outline-none cursor-pointer max-w-[150px]"
+                                >
+                                    <option value="Berufsauslagen">Berufsauslagen (SH 15.1)</option>
+                                    <option value="Weiterbildung">Weiterbildung (SH 16.1)</option>
+                                    <option value="Krankenkassenprämien">Krankenkassenprämien</option>
+                                    <option value="Versicherung">Versicherung</option>
+                                    <option value="Alimente">Alimente (Ziff. 33.1)</option>
+                                    <option value="Kindesunterhalt">Kindesunterhalt (Ziff. 33.2)</option>
+                                    <option value="Hardware/Büro">Hardware / Büro</option>
+                                    <option value="Sonstiges">Sonstiges</option>
+                                </select>
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                                <input 
+                                    type="checkbox" 
+                                    checked={exp.taxRelevant} 
+                                    disabled={isLockedRelevant}
+                                    onChange={(e) => updateExpense(realIdx, 'taxRelevant', e.target.checked)}
+                                    className={`w-4 h-4 rounded text-blue-600 focus:ring-blue-500 ${isLockedRelevant ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
+                                />
+                            </td>
+                            <td className="px-6 py-4 text-right">
+                                <input 
+                                    type="number" 
+                                    value={exp.amount} 
+                                    onChange={(e) => updateExpense(realIdx, 'amount', parseFloat(e.target.value) || 0)} 
+                                    className="w-24 text-right bg-transparent font-black text-gray-800 outline-none"
+                                    style={{ colorScheme: 'light' }}
+                                />
+                            </td>
+                            <td className="px-6 py-4 text-center text-xs font-bold text-gray-400">{exp.currency}</td>
+                            <td className="px-6 py-4 text-right font-black text-blue-600">
+                                {getConvertedCHF(exp).toLocaleString('de-CH', { minimumFractionDigits: 2 })}
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                                <label className={`cursor-pointer transition-all ${hasReceipts ? 'text-green-500' : 'text-gray-400 hover:text-blue-500'}`}>
+                                    <Paperclip size={18} />
+                                    <input type="file" className="hidden" onChange={(e) => handleReceiptUpload(realIdx, e.target.files)} />
+                                </label>
+                            </td>
+                            <td className="px-6 py-4 text-right">
+                                <button onClick={() => removeExpense(realIdx)} className="text-gray-400 hover:text-red-500 transition-colors" title="Eintrag löschen">
+                                    <Trash2 size={16} />
                                 </button>
-                              )}
-                           </td>
-                           <td className="px-6 py-4">
-                              <select 
-                                value={exp.cat} 
-                                onChange={(e) => updateExpense(realIdx, 'cat', e.target.value)} 
-                                className="bg-transparent text-[10px] font-black uppercase text-blue-600 outline-none cursor-pointer max-w-[150px]"
-                              >
-                                 <option value="Berufsauslagen">Berufsauslagen (SH 15.1)</option>
-                                 <option value="Weiterbildung">Weiterbildung (SH 16.1)</option>
-                                 <option value="Krankenkassenprämien">Krankenkassenprämien</option>
-                                 <option value="Versicherung">Versicherung</option>
-                                 <option value="Alimente">Alimente (Ziff. 33.1)</option>
-                                 <option value="Kindesunterhalt">Kindesunterhalt (Ziff. 33.2)</option>
-                                 <option value="Hardware/Büro">Hardware / Büro</option>
-                                 <option value="Sonstiges">Sonstiges</option>
-                              </select>
-                           </td>
-                           <td className="px-6 py-4 text-center">
-                              <input 
-                                type="checkbox" 
-                                checked={exp.taxRelevant} 
-                                disabled={isLockedRelevant}
-                                onChange={(e) => updateExpense(realIdx, 'taxRelevant', e.target.checked)}
-                                className={`w-4 h-4 rounded text-blue-600 focus:ring-blue-500 ${isLockedRelevant ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
-                              />
-                           </td>
-                           <td className="px-6 py-4 text-right">
-                              <input 
-                                type="number" 
-                                value={exp.amount} 
-                                onChange={(e) => updateExpense(realIdx, 'amount', parseFloat(e.target.value) || 0)} 
-                                className="w-24 text-right bg-transparent font-black text-gray-800 outline-none"
-                                style={{ colorScheme: 'light' }}
-                              />
-                           </td>
-                           <td className="px-6 py-4 text-center text-xs font-bold text-gray-400">{exp.currency}</td>
-                           <td className="px-6 py-4 text-right font-black text-blue-600">
-                              {getConvertedCHF(exp).toLocaleString('de-CH', { minimumFractionDigits: 2 })}
-                           </td>
-                           <td className="px-6 py-4 text-center">
-                              <label className={`cursor-pointer transition-all ${hasReceipts ? 'text-green-500' : 'text-gray-400 hover:text-blue-500'}`}>
-                                 <Paperclip size={18} />
-                                 <input type="file" className="hidden" onChange={(e) => handleReceiptUpload(realIdx, e.target.files)} />
-                              </label>
-                           </td>
-                           <td className="px-6 py-4 text-right">
-                              <button onClick={() => removeExpense(realIdx)} className="text-gray-400 hover:text-red-500 transition-colors" title="Eintrag löschen">
-                                <Trash2 size={16} />
-                              </button>
-                           </td>
-                        </tr>
-                      );
-                   })}
-                   {yearExpenses.length === 0 && (
-                     <tr><td colSpan={8} className="px-6 py-12 text-center text-gray-300 font-bold italic text-xs uppercase">Keine Abzüge für {selectedYear} erfasst</td></tr>
-                   )}
-                </tbody>
-             </table>
+                            </td>
+                            </tr>
+                        );
+                    })}
+                    {yearExpenses.length === 0 && (
+                        <tr><td colSpan={8} className="px-6 py-12 text-center text-gray-300 font-bold italic text-xs uppercase">Keine Abzüge für {selectedYear} erfasst</td></tr>
+                    )}
+                    </tbody>
+                </table>
+             </div>
           </div>
         </div>
       )}
